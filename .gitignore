@@ -1,0 +1,66 @@
+# ---- Environment variables ----
+.env
+.env.*
+
+# ---- Python virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Python bytecode / cache ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# ---- Distribution / packaging ----
+dist/
+build/
+*.egg-info/
+*.egg
+*.whl
+
+# ---- Installer logs ----
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ---- Unit test / coverage ----
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.pytest_cache/
+.mypy_cache/
+
+# ---- Jupyter Notebook ----
+.ipynb_checkpoints/
+
+# ---- macOS ----
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ---- VS Code ----
+.vscode/
+
+# ---- IDE / editors ----
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- SQLite databases ----
+*.db
+*.sqlite3
+
+# ---- Logs ----
+*.log
+
+# ---- Misc ----
+*.bak
+*.tmp
