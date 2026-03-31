@@ -21,43 +21,54 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 def get_embeddings() -> Embeddings:
     """Return embeddings implementation.
 
-    Uses OpenAI embeddings with OPENAI_API_KEY from `.env`.
+    Priority:
+    1) Google Gemini embeddings if GOOGLE_API_KEY is set
+    2) OpenAI proxy if PROXY_URL is set
     """
 
+    google_api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
+    proxy_url = (os.getenv("PROXY_URL") or "").strip()
+
     try:
-
-        model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-
-        dimensions: Optional[int] = None
-        raw_dimensions = (os.getenv("OPENAI_EMBEDDING_DIMENSIONS") or "").strip()
-        if raw_dimensions:
+        # ---- 1) Use Google Gemini embeddings ----
+        if google_api_key:
             try:
-                dimensions = int(raw_dimensions)
-            except ValueError as exc:
-                raise RuntimeError("OPENAI_EMBEDDING_DIMENSIONS must be an integer") from exc
+                from langchain_google_genai import GoogleGenerativeAIEmbeddings
+                model = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/text-embedding-004")
+                return GoogleGenerativeAIEmbeddings(
+                    model=model,
+                    google_api_key=google_api_key,
+                )
+            except Exception as exc:
+                logger.warning("Failed to init Google embeddings: %s — falling back to proxy", exc)
 
-
-        proxy_url = (os.getenv("PROXY_URL") or "").strip()
-
+        # ---- 2) Use OpenAI Proxy fallback ----
         if proxy_url:
-            # Use Proxy (recommended for team usage)
-            embeddings: Embeddings = OpenAIEmbeddings(
+            model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+
+            dimensions: Optional[int] = None
+            raw_dimensions = (os.getenv("OPENAI_EMBEDDING_DIMENSIONS") or "").strip()
+            if raw_dimensions:
+                try:
+                    dimensions = int(raw_dimensions)
+                except ValueError as exc:
+                    raise RuntimeError("OPENAI_EMBEDDING_DIMENSIONS must be an integer") from exc
+
+            return OpenAIEmbeddings(
                 model=model,
                 api_key="proxy-key",  # dummy key (proxy ignores)
                 base_url=f"{proxy_url}/v1",
                 dimensions=dimensions,
             )
-        else:
-            raise RuntimeError(
-                "No embedding config found. Set PROXY_URL or OPENAI_API_KEY"
-            )
 
-        return embeddings
-    
+        raise RuntimeError(
+            "No embedding config found. Set GOOGLE_API_KEY or PROXY_URL."
+        )
+
     except Exception:
         logger.exception("Embedding provider init failed")
-
         raise RuntimeError("Embedding provider unavailable")
+
 
 def _env(name: str) -> Optional[str]:
     value = os.getenv(name)

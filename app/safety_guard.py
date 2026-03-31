@@ -249,6 +249,7 @@ def _rule_based_detect(query: str, role: str | None = None) -> tuple[bool, str, 
 def predict_query_safety(query: str, role: str | None = None) -> dict[str, Any]:
     """Return {'allowed': bool, 'category': str, 'reason': str}."""
     role_norm = (role or "").strip().lower()
+    logger.info("[Safety Guard] Incoming query: %r | Role: %r | Norm Role: %r", query[:50], role, role_norm)
     chain_key = "admin" if role_norm == "admin" else "partner"
     cache_role = role_norm or "guest"
     cache = get_cache_service()
@@ -279,11 +280,8 @@ def predict_query_safety(query: str, role: str | None = None) -> dict[str, Any]:
                 "reason": str(cached.get("reason", "")),
             }
     except CacheUnavailableError:
-        return {
-            "allowed": False,
-            "category": "cache_unavailable",
-            "reason": "Admin safety cache unavailable",
-        }
+        logger.warning("Safety cache unavailable; proceeding with live checks")
+        pass # Proceed to live checks
 
     if role_norm == "partner":
         for pattern in _ALLOWLIST_PATTERNS:

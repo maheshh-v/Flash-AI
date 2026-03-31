@@ -10,6 +10,29 @@ from app.cache_service import CacheUnavailableError, get_cache_service
 CHAT_URL = os.getenv("CHAT_URL")
 
 
+def _call_llm_for_mongo(question: str) -> dict:
+    from app.llm import get_llm
+    from langchain_core.messages import HumanMessage
+    import json
+    
+    llm = get_llm()
+    response = llm.invoke([HumanMessage(content=question)])
+    text = response.content.strip()
+    
+    try:
+        # Sometimes the LLM wraps the response in markdown blocks
+        if "```json" in text:
+            extracted = text.split("```json")[1].split("```")[0].strip()
+            return json.loads(extracted)
+        if text.startswith("{") and text.endswith("}"):
+            return json.loads(text)
+    except Exception as e:
+        print("Failed to parse LLM JSON:", e)
+        pass
+        
+    return {"answer": text}
+
+
 def _hash_text(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
 
@@ -60,21 +83,12 @@ DO NOT EVERY INVENT NEW FIELD WHICH IS NOT PRESENT IN SCHEMA. If user is asking 
         "Content-Type": "application/json"
     }
 
+    try:
+        data = _call_llm_for_mongo(question)
+    except Exception as e:
+        raise Exception(f"LLM Error: {e}")
 
-
-    response = requests.post(
-        CHAT_URL,
-        json=payload,
-        headers=headers,
-        timeout=30
-    )
-
-    if response.status_code != 200:
-        raise Exception(response.text)
-
-    data = response.json()
-
-    # Your proxy likely returns:
+    # The result contains the answer which is a mongo query string
     # { "answer": "db.collection.find()" }
     answer = data.get("answer", "").strip()
     try:
@@ -231,21 +245,12 @@ If the response contains anything other than valid JSON, the answer is incorrect
         "Content-Type": "application/json"
     }
 
+    try:
+        data = _call_llm_for_mongo(question)
+    except Exception as e:
+        raise Exception(f"LLM Error: {e}")
 
-
-    response = requests.post(
-        CHAT_URL,
-        json=payload,
-        headers=headers,
-        timeout=30
-    )
-
-    if response.status_code != 200:
-        raise Exception(response.text)
-
-    data = response.json()
-
-    # Your proxy likely returns:
+    # Retrieve response answer
     # { "answer": "db.collection.find()" }
     answer = data.get("answer", "").strip()
     try:
@@ -301,11 +306,12 @@ You are talking to a Role {role_label}.
 
     headers = {
         "Content-Type": "application/json"
-        # "Authorization": "Bearer YOUR_API_KEY"  # if required
     }
 
-    response = requests.post(CHAT_URL, json=payload, headers=headers)
-    out = response.json()
+    try:
+        out = _call_llm_for_mongo(question.strip())
+    except Exception as e:
+        raise Exception(f"LLM Error: {e}")
     try:
         cache.set_json(cache_key, out, ttl, role=role_norm, domain=domain)
     except CacheUnavailableError:
@@ -352,17 +358,10 @@ Return only rewritten normalized query text.
         "Content-Type": "application/json"
     }
 
-    response = requests.post(
-        CHAT_URL,
-        json=payload,
-        headers=headers,
-        timeout=30
-    )
-
-    if response.status_code != 200:
-        raise Exception(response.text)
-
-    data = response.json()
+    try:
+        data = _call_llm_for_mongo(question.strip())
+    except Exception as e:
+        raise Exception(f"LLM Error: {e}")
     normalized = (data.get("answer", "") or "").strip()
     answer = normalized or user_query
     cache.set_json(cache_key, {"answer": answer}, ttl, role=role_norm, domain=domain)
@@ -406,17 +405,9 @@ Return only JSON with keys: allowed, message.
     headers = {"Content-Type": "application/json"}
 
     try:
-        response = requests.post(
-            CHAT_URL,
-            json=payload,
-            headers=headers,
-            timeout=30
-        )
-        if response.status_code != 200:
-            return {"allowed": True, "message": "Validation skipped due to validator error"}
+        data = _call_llm_for_mongo(question.strip())
+        answer = str(data.get("answer", data)) # Handle unstructured text fallback
 
-        data = response.json()
-        answer = (data.get("answer", "") or "").strip()
 
         # Try direct JSON first
         try:
@@ -445,10 +436,9 @@ import json
 import time
 
 try:
-    from pinecone import Pinecone
+    from pinecone import Pinecone as _Pinecone  # lazy, not used at module level
 except ImportError:
-    print("Please install pinecone: pip install pinecone")
-    exit(1)
+    _Pinecone = None  # will fail gracefully if called
 
 PINECONE_API_KEY = "pcsk_6KZmMj_DEaYE3Kef64KRPETaE31npL2bdnA6Ncn6RyBxvi1FFqw31cxRhqTgFYNXjHHP29"
 PINECONE_INDEX_NAME = "ai-agent-backend-indexes"
@@ -474,7 +464,7 @@ def get_embedding(text, retries=3):
 def get_context(query_text):
     print("Fetching context from Pinecone...")
     query_vector = get_embedding(query_text)
-    pc = Pinecone(api_key=PINECONE_API_KEY)
+    pc = _Pinecone(api_key=PINECONE_API_KEY)
     index = pc.Index(PINECONE_INDEX_NAME)
     
     # 1. Fetch Business Logic (admin_v4)
@@ -604,13 +594,12 @@ Generate MongoDB Python query only.
     headers = {"Content-Type": "application/json"}
     
     print("Generating PyMongo Query via LLM...")
-    response = requests.post(CHAT_URL, json=payload, headers=headers, timeout=60)
-    
-    if response.status_code == 200:
-        data = response.json()
+    try:
+        data = _call_llm_for_mongo(question_payload)
         query_code = None
         
-        # Pull answer directly based on proxy structure
+        # Pull answer directly
+
         query_code = data.get("answer", "").strip()
             
         if query_code:
@@ -628,7 +617,8 @@ Generate MongoDB Python query only.
             print("------------------------------\n")
             return context, query_code
             
-    print("Failed to generate query:", response.text)
+    except Exception as e:
+        print("Failed to generate query:", e)
     return None
 
 

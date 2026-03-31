@@ -476,6 +476,8 @@ def chat(
                 }
 
         safety = predict_query_safety(query_text, role)
+        logger.info("[Safety Check] role=%s query=%r allowed=%s category=%s reason=%s", 
+                    role, query_text[:50], safety.get("allowed"), safety.get("category"), safety.get("reason"))
         
         if not safety.get("allowed", True):
             logger.warning(
