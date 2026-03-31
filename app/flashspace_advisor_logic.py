@@ -185,6 +185,7 @@ def build_flashspace_runtime_hint(query: str, conversation_hint: str = "", remem
         "FlashSpace advisor constraints:",
         "- Respond direct and concise. No long explanations.",
         "- Do not invent locations, prices, amenities, or city names.",
+        "- STRICT RULE: If the user asks for a city (like 'Udaipur') that is NOT in the retrieved context, YOU MUST reply EXACTLY with: 'I don't have information about spaces in that area. Would you like to try another city?' No exceptions.",
         "- If data is missing, say you do not have information for that area and ask for another city.",
         "- Show at most 3-5 options unless user asks for more.",
         "- For recommendations, classify as Affordable / Balanced / Premium when possible.",

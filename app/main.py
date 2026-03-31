@@ -518,6 +518,15 @@ def chat(
                 print("Retrieved docs:", list(zip(docs, _score)))
                 context = format_docs(docs)
 
+                # Extract explicit valid cities from the retrieved documents
+                from app.recommendation import _build_space_candidates
+                doc_candidates = _build_space_candidates(docs)
+                valid_cities = list(set([c.get("city", "").strip().title() for c in doc_candidates if c.get("city")]))
+                if valid_cities:
+                    context = f"WARNING! THE ONLY VALID CITIES IN THIS RETRIEVED CONTEXT ARE: {', '.join(valid_cities)}. IF THE USER ASKS FOR A CITY NOT IN THIS LIST, YOU MUST REJECT IT.\n\n" + context
+                else:
+                    context = "WARNING! NO CITIES FOUND IN RETRIEVED CONTEXT. YOU MUST REJECT SPECIFIC CITY REQUESTS.\n\n" + context
+
                 recommendation_reply = build_contextual_recommendation_reply(
                     query=query,
                     docs=docs,
