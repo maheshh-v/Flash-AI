@@ -26,16 +26,28 @@ def get_llm():
     temperature = float(os.getenv("LLM_TEMPERATURE", "0.3"))
 
     # ---- 1) Cloudflare Workers AI (primary) ----
-    # CF AI Gateway exposes an OpenAI-compatible endpoint at:
-    #   {gateway_url}/v1/chat/completions
-    # ChatOpenAI (langchain-openai) appends /chat/completions to base_url,
-    # so base_url must be {gateway_url}/v1.
     if cf_token and cf_gateway_url:
         try:
             from langchain_openai import ChatOpenAI
 
-            # OpenAI-compatible base: gateway + /v1
-            base_url = cf_gateway_url.rstrip("/") + "/v1"
+            # Extract Account ID from Gateway URL or fallback to a direct approach
+            # Gateway URL format: https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_name}/workers-ai
+            account_id = ""
+            if "gateway.ai.cloudflare.com/v1/" in cf_gateway_url:
+                try:
+                    parts = cf_gateway_url.split("/v1/")[1].split("/")
+                    if len(parts) >= 1:
+                        account_id = parts[0]
+                except Exception:
+                    pass
+
+            # If we have an account_id, use the direct AI endpoint for reliability,
+            # as the Gateway can sometimes have routing/auth issues with certain tokens.
+            if account_id:
+                base_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+            else:
+                # Fallback to provided gateway URL without extra /v1
+                base_url = cf_gateway_url.rstrip("/")
 
             logger.info("[LLM Provider] Cloudflare Workers AI — model=%s base=%s", cf_model, base_url)
             return ChatOpenAI(
@@ -43,6 +55,8 @@ def get_llm():
                 api_key=cf_token,
                 base_url=base_url,
                 temperature=temperature,
+                max_retries=3,
+                timeout=45,
             )
         except Exception as exc:
             logger.error("Failed to initialise Cloudflare LLM: %s — falling back to Gemini", exc)

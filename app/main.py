@@ -32,7 +32,7 @@ from app.recommendation import (
     build_contextual_recommendation_reply,
     is_company_registration_recommendation_query,
 )
-from app.flashspace_advisor_logic import get_flashspace_fast_response, build_flashspace_runtime_hint
+# from app.flashspace_advisor_logic import get_flashspace_fast_response, build_flashspace_runtime_hint # MOVED DOWN
 
 
 from app.router import router_chain
@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 # Redis connection for distributed rate limiting
 try:
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    redis_client = redis.from_url(redis_url, decode_responses=True)
+    redis_client = redis.from_url(redis_url, decode_responses=True, socket_connect_timeout= 5)
     redis_client.ping()
     logger.info("Redis connected for rate limiting")
 except Exception as e:
@@ -77,12 +77,12 @@ except Exception as e:
 
 
 
-_GUEST_KNOWN_CITIES = {
-    "bangalore", "bengaluru", "mumbai", "delhi", "new delhi", "gurgaon", "gurugram",
-    "noida", "pune", "hyderabad", "chennai", "kolkata", "ahmedabad", "jaipur",
-    "lucknow", "indore", "bhopal", "surat", "kochi", "coimbatore", "nagpur",
-    "visakhapatnam", "vijayawada", "patna", "bhubaneswar", "chandigarh", "gujarat", "gujrat",
-}
+from app.flashspace_advisor_logic import (
+    get_flashspace_fast_response,
+    build_flashspace_runtime_hint,
+    KNOWN_CITIES,
+    KNOWN_STATES
+)
 
 def get_user_identifier(request: Request) -> str:
     """Extract user_id from auth context for rate limiting."""
@@ -293,7 +293,7 @@ def _extract_city_from_text(text: str) -> str:
     query = (text or "").strip().lower()
     if not query:
         return ""
-    for city in _GUEST_KNOWN_CITIES:
+    for city in KNOWN_CITIES:
         if re.search(rf"\b{re.escape(city)}\b", query):
             return city
     return ""
@@ -457,13 +457,13 @@ def chat(
 
         recent_user_text_for_fast = ""
         remembered_city_for_fast = ""
-        if role in {"public"}:
+        if role in {"public", "guest"}:
             recent_user_text_for_fast = _get_guest_recent_user_text(session_id=session_id, max_turns=20)
             remembered_city_for_fast = _extract_city_from_text(recent_user_text_for_fast)
 
         logger.info("/chat namespace=%s session_id=%s query=%r", role, session_id, data.query)
 
-        if role in {"public"}:
+        if role in {"public", "guest"}:
             fast_reply = get_flashspace_fast_response(
                 query_text,
                 conversation_hint=recent_user_text_for_fast,
@@ -490,119 +490,76 @@ def chat(
             return {"reply": "This is not allowed.", "session_id": session_id}
 
 
-        if role in {"public"}:     # guest aliases
-            history_summary = ""
+        if role in {"public", "guest"}:
             try:
+                # Fast Rule-Based Safety Check only for Guests
+                safety = predict_query_safety(query_text, role)
+                if not safety.get("allowed", True):
+                    return {"reply": "This is not allowed.", "session_id": session_id}
 
-                docs = []
-                context = ""
-                role=auth.role
-                query=data.query
-                session_id=session_id
-                # actor_id=auth.actor_id,
-
-                recent_user_text = recent_user_text_for_fast
-                remembered_city = remembered_city_for_fast
-
-
-                history_summary = _get_guest_context_summary(
-                    session_id=session_id,
-                    query=query,
-                    max_turns=15
-                )
-
-        
                 # Guest role: ONLY use Pinecone RAG, NO MongoDB access
-                retrieval_k = 20 if is_proximity_query(query) else 4
-                docs, _score = _retrieve_with_scores_cached(namespace=role, query=query, k=retrieval_k, role=role)
-                print("Retrieved docs:", list(zip(docs, _score)))
-                context = format_docs(docs)
+                retrieval_k = 20 if is_proximity_query(query_text) else 4
+                # IMPORTANT: All guest data was migrated to the 'public' namespace in the new CF index
+                docs, scores = _retrieve_with_scores_cached(namespace="public", query=query_text, k=retrieval_k, role=role)
+                
+                # Check for high-confidence matches
+                max_score = max(scores) if scores else 0
+                logger.info("[Guest RAG Check] query=%r max_score=%.4f results=%d", query_text, max_score, len(docs))
+                
+                # Cloudflare BGE-base-en-v1.5 has different score dynamics than OpenAI. 0.22 is a safer floor.
+                SCORE_THRESHOLD = 0.22 
+                
+                # If we mention a KNOWN_CITY, we should trust our data list more than the score threshold
+                city_in_query = _extract_city_from_text(query_text)
 
-                # Extract explicit valid cities from the retrieved documents
+                if max_score < SCORE_THRESHOLD and not city_in_query:
+                    # No relevant workspace info found and NO known city mentioned
+                    context = "CRITICAL: No relevant workspace information found in database. You must politey refuse to invent names."
+                else:
+                    context = format_docs(docs)
+                    if city_in_query:
+                        # SUPER BYPASS: If it's a known city, explicitly tell the LLM it IS supported
+                        context = f"SUPPORTED CITY CONFIRMED: FlashSpace HAS workspaces in {city_in_query.title()}. Do not deny existance. Use the retrieved context below if relevant, otherwise state we're here and invite more specifics.\n\n" + context
+
+                # Extract explicit valid cities/states from the docs
                 from app.recommendation import _build_space_candidates
                 doc_candidates = _build_space_candidates(docs)
-                valid_cities = list(set([c.get("city", "").strip().title() for c in doc_candidates if c.get("city")]))
-                if valid_cities:
-                    context = f"WARNING! THE ONLY VALID CITIES IN THIS RETRIEVED CONTEXT ARE: {', '.join(valid_cities)}. IF THE USER ASKS FOR A CITY NOT IN THIS LIST, YOU MUST REJECT IT.\n\n" + context
-                else:
-                    context = "WARNING! NO CITIES FOUND IN RETRIEVED CONTEXT. YOU MUST REJECT SPECIFIC CITY REQUESTS.\n\n" + context
-
+                valid_places = set()
+                for c in doc_candidates:
+                    if c.get("city"): valid_places.add(c.get("city").strip().title())
+                    if c.get("state"): valid_places.add(c.get("state").strip().title())
+                
+                if valid_places:
+                    context = f"INFO! THE VALID LOCATIONS IN THIS RETRIEVED CONTEXT ARE: {', '.join(valid_places)}. IF THE USER ASKS FOR A LOCATION NOT IN THIS RETRIEVED CONTENT, EXPLAIN WE HAVE NO DATA FOR IT.\n\n" + context
+                
                 recommendation_reply = build_contextual_recommendation_reply(
-                    query=query,
+                    query=query_text,
                     docs=docs,
-                    conversation_hint=recent_user_text or history_summary,
-                    remembered_city=remembered_city,
+                    conversation_hint=recent_user_text_for_fast,
+                    remembered_city=remembered_city_for_fast,
                 )
-                if (not recommendation_reply) and is_company_registration_recommendation_query(query):
-                    target_city = _extract_city_from_text(f"{query}\n{recent_user_text}") or remembered_city
-                    pricing_query = (
-                        f"virtual office GST price company registration {target_city}".strip()
-                        if target_city
-                        else "virtual office GST price company registration"
-                    )
-                    pricing_docs, _ = _retrieve_with_scores_cached(
-                        namespace=role,
-                        query=pricing_query,
-                        k=12,
-                        role=role,
-                    )
-                    recommendation_reply = build_contextual_recommendation_reply(
-                        query=query,
-                        docs=pricing_docs,
-                        conversation_hint=recent_user_text or history_summary,
-                        remembered_city=target_city or remembered_city,
-                    )
                 if recommendation_reply:
                     return {"reply": recommendation_reply, "session_id": session_id}
 
-                nearest_hint = get_nearest_space_hint(query, docs)
-                if nearest_hint:
-                    context += f"\n\nSystem Nearest Match (High Priority):\n{nearest_hint}"
-
-
-                if history_summary:
-                    context += f"\n\nConversation Summary:\n{history_summary}"
-
-                if remembered_city:
-                                context += (
-                                    f"\n\nConversation Memory:\n"
-                                    f"User already specified city as '{remembered_city}'. "
-                                    f"Do not ask for city again unless user changes it."
-                                )
-                else:
-                                context += (
-                                    "\n\nConversation Memory:\n"
-                                    "No user-confirmed city has been provided yet. "
-                                    "Do NOT claim the user previously mentioned any city/location."
-                                )
-
-
-
-
-                rec_hint = get_service_recommendation(query,conversation_hint=recent_user_text or history_summary,)
-                if rec_hint:
-                    context += f"\n\nSystem Recommendation: {rec_hint}"
+                nearest_hint = get_nearest_space_hint(query_text, docs)
+                if nearest_hint: context += f"\n\nSystem Nearest Match:\n{nearest_hint}"
 
                 policy_hint = build_flashspace_runtime_hint(
-                    query=query,
-                    conversation_hint=recent_user_text or history_summary,
-                    remembered_city=remembered_city,
+                    query=query_text,
+                    conversation_hint=recent_user_text_for_fast,
+                    remembered_city=remembered_city_for_fast,
                 )
-                if policy_hint:
-                    context += f"\n\nSystem Policy:\n{policy_hint}"
+                if policy_hint: context += f"\n\nSystem Policy:\n{policy_hint}"
                 
             except Exception:
-                logger.exception("Retrieval failed; continuing with empty context")
-                context = f"Conversation Summary:\n{history_summary}" if history_summary else ""
+                logger.exception("Retrieval failed; using minimal context")
+                context = ""
 
             response = chain.invoke(
-                {"question": query, "context": context},
+                {"question": query_text, "context": context},
                 config={"configurable": {"session_id": session_id, "namespace": role}}
             )
-
-            reply = response.content
-            payload = {"reply": reply, "session_id": session_id}
-            return payload
+            return {"reply": response.content, "session_id": session_id}
            
 
 

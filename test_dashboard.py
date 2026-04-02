@@ -111,7 +111,7 @@ with st.sidebar:
     st.markdown("## 🔬 Test Dashboard")
     st.markdown("---")
 
-    backend = st.text_input("🌐 Backend URL", value="http://127.0.0.1:8000")
+    backend = st.text_input("🌐 Backend URL", value="http://127.0.0.1:8002")
     st.markdown("---")
 
     role = st.radio(

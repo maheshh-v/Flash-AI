@@ -22,47 +22,43 @@ def get_embeddings() -> Embeddings:
     """Return embeddings implementation.
 
     Priority:
-    1) Google Gemini embeddings if GOOGLE_API_KEY is set
-    2) OpenAI proxy if PROXY_URL is set
+    1) Cloudflare Workers AI via AI Gateway (OpenAI compatible)
+    2) Google Gemini embeddings if GOOGLE_API_KEY is set
     """
-
+    
+    cf_token = (os.getenv("CF_API_TOKEN") or "").strip()
+    cf_gateway_url = (os.getenv("CF_GATEWAY_URL") or "").strip()
     google_api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
-    proxy_url = (os.getenv("PROXY_URL") or "").strip()
 
     try:
-        # ---- 1) Use Google Gemini embeddings ----
+        # ---- 1) Cloudflare Workers AI Embeddings ----
+        if cf_token and cf_gateway_url:
+            from langchain_cloudflare import CloudflareWorkersAIEmbeddings
+            
+            # Extract account_id from gateway URL
+            parts = cf_gateway_url.split('/')
+            account_id = parts[4] if len(parts) > 4 else ""
+            
+            cf_model = os.getenv("CF_EMBEDDING_MODEL", "@cf/baai/bge-base-en-v1.5")
+            
+            logger.info("Using native Cloudflare Embeddings with model: %s", cf_model)
+            return CloudflareWorkersAIEmbeddings(
+                account_id=account_id,
+                api_token=cf_token,
+                model_name=cf_model,
+            )
+
+        # ---- 2) Google Gemini fallback ----
         if google_api_key:
-            try:
-                from langchain_google_genai import GoogleGenerativeAIEmbeddings
-                model = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/text-embedding-004")
-                return GoogleGenerativeAIEmbeddings(
-                    model=model,
-                    google_api_key=google_api_key,
-                )
-            except Exception as exc:
-                logger.warning("Failed to init Google embeddings: %s — falling back to proxy", exc)
-
-        # ---- 2) Use OpenAI Proxy fallback ----
-        if proxy_url:
-            model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-
-            dimensions: Optional[int] = None
-            raw_dimensions = (os.getenv("OPENAI_EMBEDDING_DIMENSIONS") or "").strip()
-            if raw_dimensions:
-                try:
-                    dimensions = int(raw_dimensions)
-                except ValueError as exc:
-                    raise RuntimeError("OPENAI_EMBEDDING_DIMENSIONS must be an integer") from exc
-
-            return OpenAIEmbeddings(
+            from langchain_google_genai import GoogleGenerativeAIEmbeddings
+            model = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/text-embedding-004")
+            return GoogleGenerativeAIEmbeddings(
                 model=model,
-                api_key="proxy-key",  # dummy key (proxy ignores)
-                base_url=f"{proxy_url}/v1",
-                dimensions=dimensions,
+                google_api_key=google_api_key,
             )
 
         raise RuntimeError(
-            "No embedding config found. Set GOOGLE_API_KEY or PROXY_URL."
+            "No embedding config found. Set CF_API_TOKEN + CF_GATEWAY_URL or GOOGLE_API_KEY."
         )
 
     except Exception:
@@ -97,13 +93,10 @@ def get_pinecone_vectorstore(namespace: Optional[str] = None):
     (e.g. 'user', 'admin', 'partner', 'affiliate', 'sales').
     """
 
-    try:
-        from pinecone import Pinecone  # type: ignore
-        from langchain_pinecone import PineconeVectorStore  # type: ignore
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError(
-            "Pinecone dependencies not installed. Install 'pinecone' and 'langchain-pinecone'."
-        ) from exc
+    # Use runtime imports to avoid forcing unnecessary dependencies on all flows.
+    # However, these ARE required for guest/public RAG.
+    from pinecone import Pinecone
+    from langchain_pinecone import PineconeVectorStore
 
     api_key = _require_env("PINECONE_API_KEY")
     index_name = _require_env("PINECONE_INDEX_NAME")

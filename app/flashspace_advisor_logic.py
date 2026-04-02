@@ -67,20 +67,53 @@ _FIND_MY_FIT_TRIGGERS = {
     "which one is best",
 }
 
-_KNOWN_CITIES = {
+KNOWN_CITIES = {
+    "ahmedabad",
+    "bangalore",
+    "bengaluru",
+    "chandigarh",
+    "chennai",
     "delhi",
     "new delhi",
     "gurgaon",
     "gurugram",
-    "noida",
-    "bangalore",
-    "bengaluru",
-    "mumbai",
-    "pune",
     "hyderabad",
-    "chennai",
+    "jaipur",
+    "kochi",
     "kolkata",
-    "ahmedabad",
+    "mumbai",
+    "noida",
+    "patna",
+    "pune",
+    "jammu and kashmir",
+    "chhattisgarh",
+    "jharkhand",
+    "uttarakhand",
+    "himachal pradesh",
+    "punjab",
+    "madhya pradesh",
+}
+
+_NOT_SUPPORTED_INDIAN_CITIES = {
+    "udaipur", "lucknow", "indore", "bhopal", "surat", "coimbatore", "nagpur",
+    "visakhapatnam", "vijayawada", "bhubaneswar", "amritsar", "ludhiana",
+    "kanpur", "agra", "varanasi", "meerut", "rajkot", "vadodara", "ghaziabad",
+}
+
+KNOWN_STATES = {
+    "gujarat": ["ahmedabad"],
+    "karnataka": ["bangalore", "bengaluru"],
+    "maharashtra": ["mumbai", "pune"],
+    "kerala": ["kochi"],
+    "tamil nadu": ["chennai"],
+    "telangana": ["hyderabad"],
+    "uttar pradesh": ["noida"],
+    "haryana": ["gurgaon", "gurugram"],
+    "bihar": ["patna"],
+    "punjab": ["chandigarh"],
+    "rajasthan": ["jaipur"],
+    "west bengal": ["kolkata"],
+    "delhi": ["new delhi"]
 }
 
 
@@ -90,10 +123,17 @@ def _normalize(text: str) -> str:
 
 def _mentions_city(text: str) -> bool:
     normalized = _normalize(text)
-    for city in _KNOWN_CITIES:
+    for city in KNOWN_CITIES:
         if re.search(rf"\b{re.escape(city)}\b", normalized):
             return True
     return False
+
+def _mentions_unsupported_city(text: str) -> Optional[str]:
+    normalized = _normalize(text)
+    for city in _NOT_SUPPORTED_INDIAN_CITIES:
+        if re.search(rf"\b{re.escape(city)}\b", normalized):
+            return city
+    return None
 
 
 def _contains_any(text: str, words: set[str]) -> bool:
@@ -165,6 +205,16 @@ def get_flashspace_fast_response(
             return None
         return "Which city are you looking for?"
 
+    # Check for known states
+    for state, cities in KNOWN_STATES.items():
+        if state in text and not _mentions_city(text):
+            return f"We have spaces in {state}! Are you looking for a specific city like {cities[0].title()}?"
+
+    # Blocking unsupported cities
+    unsupported = _mentions_unsupported_city(text)
+    if unsupported:
+        return f"I'm sorry, we currently don't have workspaces in {unsupported.title()}."
+
     return None
 
 
@@ -185,8 +235,8 @@ def build_flashspace_runtime_hint(query: str, conversation_hint: str = "", remem
         "FlashSpace advisor constraints:",
         "- Respond direct and concise. No long explanations.",
         "- Do not invent locations, prices, amenities, or city names.",
-        "- STRICT RULE: If the user asks for a city (like 'Udaipur') that is NOT in the retrieved context, YOU MUST reply EXACTLY with: 'I don't have information about spaces in that area. Would you like to try another city?' No exceptions.",
-        "- If data is missing, say you do not have information for that area and ask for another city.",
+        "- If the user asks for a city NOT listed in the retrieved context, you MUST state politely that we currently do not have spaces there, but offer alternative major cities like Mumbai, Delhi, or Bangalore.",
+        "- If the user asks for a place entirely outside of India, politely say we don't have spaces there and offer 'Mumbai' or 'Delhi' as an alternative.",
         "- Show at most 3-5 options unless user asks for more.",
         "- For recommendations, classify as Affordable / Balanced / Premium when possible.",
         "- Ask only one question at a time.",
@@ -199,6 +249,7 @@ def build_flashspace_runtime_hint(query: str, conversation_hint: str = "", remem
         "- Use clickable markdown links for navigation and company pages.",
         "- Do not provide location listings/pricing unless user explicitly asks.",
         "- For amenity presentation, output raw HTML details tags and shuffled amenities separated with ' • '.",
+        f"- FYI, Flashspace operates in these key cities: {', '.join(sorted({c.title() for c in KNOWN_CITIES}))}. Feel free to share a few of these if the user asks where we operate.",
     ]
 
     if remembered_city:

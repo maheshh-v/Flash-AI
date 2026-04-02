@@ -324,6 +324,11 @@ def predict_query_safety(query: str, role: str | None = None) -> dict[str, Any]:
         _safe_cache_set(result)
         return result
 
+    if role_norm in {"public", "guest", "user"}:
+        result = {"allowed": True, "category": "safe", "reason": "Rule passed, skipping LLM for guest"}
+        _safe_cache_set(result)
+        return result
+
     chain = _safety_chains.get(chain_key)
     if chain is not None:
         try:

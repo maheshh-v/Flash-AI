@@ -36,8 +36,13 @@ def _has_city_mention(user_input: str) -> bool:
         if re.search(rf"\b{re.escape(region)}\b", text):
             return True
 
-    # Fallback pattern for phrases like "space in Bangalore"
-    return bool(re.search(r"\b(in|at|near)\s+[a-z][a-z\s]{2,24}\b", text))
+# Internal helper for main.py integration
+def _extract_city_from_text_logic(text: str) -> str:
+    t = (text or "").lower()
+    for city in _KNOWN_CITIES:
+        if re.search(rf"\b{re.escape(city)}\b", t):
+            return city
+    return ""
 
 
 def _has_service_mention(text: str) -> bool:
@@ -99,6 +104,13 @@ def _build_space_candidates(docs: list) -> List[Dict[str, Any]]:
         address = (metadata.get("address") or "").strip()
         if not address:
             address = _extract_location_from_content(page_content)
+        
+        # Fallback: Use chunk of text if no explicit address but mentions a known city
+        if not address:
+            for city in _KNOWN_CITIES:
+                if city in page_content.lower():
+                    address = f"{city.title()} workspace"
+                    break
 
         if not address:
             continue
@@ -107,7 +119,7 @@ def _build_space_candidates(docs: list) -> List[Dict[str, Any]]:
             {
                 "index": idx,
                 "address": address,
-                "city": (metadata.get("city") or "").strip(),
+                "city": (metadata.get("city") or "").strip() or _extract_city_from_text_logic(address),
                 "state": (metadata.get("state") or "").strip(),
                 "gst_price": metadata.get("gst_price"),
                 "br_price": metadata.get("br_price"),
