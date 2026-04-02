@@ -1,18 +1,13 @@
 # Stage 1: Build dependencies
-FROM python:3.11-slim as builder
+FROM python:3.11 as builder
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install python dependencies to a temporary directory
+# Install python dependencies
 COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
-# Stage 2: Final lightweight runner image
+# Stage 2: Final runner image
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -27,9 +22,10 @@ COPY . .
 # Expose the API port
 EXPOSE 8000
 
-# Set environment variables for production
+# Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # Command to run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.1", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
