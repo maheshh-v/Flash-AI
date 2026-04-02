@@ -387,8 +387,79 @@ def get_rate_limits_for_role(role: str) -> tuple:
     return limits.get(role, ("20/minute", "5/5seconds"))
 
 
+@app.post("/chat/guest")
+@limiter.limit("20/minute")
+async def chat_guest(request: Request, data: Query):
+    """
+    Simplified guest-only chat endpoint.
+    No JWT required. Automatically uses 'public' role/namespace.
+    """
+    session_id = data.session_id or f"guest_{hashlib.sha256(data.conversation_id.encode()).hexdigest()[:12]}"
+    
+    # Force 'public' role for this endpoint
+    role = "public"
+    query_text = (data.query or "").strip()
+    if not query_text:
+        return {"reply": "Query cannot be empty.", "session_id": session_id}
+    
+    logger.info("/chat/guest session_id=%s query=%r", session_id, query_text)
 
-@app.post("/chat")
+    # 1. Fast rule-based response
+    # (Note: we need to import or ensure these functions are accessible)
+    from app.flashspace_advisor_logic import get_flashspace_fast_response, build_flashspace_runtime_hint
+    
+    recent_user_text_for_fast = "" # Default if mongo fails or not used
+    remembered_city_for_fast = _extract_city_from_text(query_text)
+    
+    fast_reply = get_flashspace_fast_response(
+        query_text,
+        conversation_hint="",
+        remembered_city=remembered_city_for_fast,
+    )
+    if fast_reply:
+        return {"reply": fast_reply, "session_id": session_id}
+
+    # 2. Safety Check
+    safety = predict_query_safety(query_text, role)
+    if not safety.get("allowed", True):
+        return {"reply": "This is not allowed.", "session_id": session_id}
+
+    # 3. RAG Retrieval (optimized for Jaipur/Bangalore)
+    retrieval_k = 20 if is_proximity_query(query_text) else 4
+    try:
+        from app.main import _retrieve_with_scores_cached, format_docs
+        docs, scores = _retrieve_with_scores_cached(namespace="public", query=query_text, k=retrieval_k, role=role)
+        max_score = max(scores) if scores else 0
+        SCORE_THRESHOLD = 0.22
+        city_in_query = _extract_city_from_text(query_text)
+
+        if max_score < SCORE_THRESHOLD and not city_in_query:
+            context = "CRITICAL: No relevant workspace information found in database."
+        else:
+            context = format_docs(docs)
+            if city_in_query:
+                context = f"SUPPORTED CITY CONFIRMED: FlashSpace HAS workspaces in {city_in_query.title()}.\n" + context
+    except Exception:
+        logger.exception("Guest retrieval failed")
+        context = ""
+
+    # 4. LLM Generation
+    response = chain.invoke(
+        {"question": query_text, "context": context},
+        config={"configurable": {"session_id": session_id, "namespace": role}}
+    )
+    
+    # Optional: save to memory if using a simplified store
+    try:
+        save_message(session_id, "user", query_text, data.conversation_id, role)
+        save_message(session_id, "assistant", response.content, data.conversation_id, role)
+    except Exception:
+        logger.warning("Failed saving guest message to memory")
+    
+    return {"reply": response.content, "session_id": session_id}
+
+
+
 @limiter.limit("1000/minute")  # Global limit
 @limiter.limit("100/minute", key_func=get_ip_identifier)  # IP limit
 def chat(
