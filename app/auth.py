@@ -106,24 +106,23 @@ def get_auth_context(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> AuthContext:
     if os.getenv("DEV_AUTH_BYPASS", "false").lower() == "true":
-        logger.warning("DEV AUTH BYPASS ENABLED")
+        logger.warning("⚠️  DEV AUTH BYPASS ENABLED - DISABLE IN PRODUCTION!")
         return AuthContext(
             user_id=os.getenv("DEV_USER_ID", "dev_user"),
             tenant_id=os.getenv("DEV_TENANT_ID", "dev_tenant"),
             role=os.getenv("DEV_ROLE", "admin"),  # type: ignore
         )
 
-    # allow guest access if no credentials provided
-    if credentials is None:
+    # Allow guest access if no credentials provided
+    if credentials is None or not (credentials.credentials or "").strip():
+        logger.info("No credentials provided - using guest access")
         return AuthContext(
             user_id="guest",
             tenant_id=os.getenv("GUEST_TENANT_ID", "public"),
-            role="public",  # type: ignore
+            role="guest",  # type: ignore
         )
 
-    if credentials is None or not (credentials.credentials or "").strip():
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-
+    # Validate bearer scheme
     if (credentials.scheme or "").lower() != "bearer":
         raise HTTPException(status_code=401, detail="Invalid Authorization scheme")
 
@@ -139,7 +138,7 @@ def get_auth_context(
         tenant_id = _get_claim(payload, tenant_claim)
         role_raw = _get_claim(payload, role_claim)
 
-        print(f"Decoded JWT claims: user_id={user_id}, tenant_id={tenant_id}, role={role_raw}")
+        logger.info(f"Decoded JWT claims: user_id={user_id}, tenant_id={tenant_id}, role={role_raw}")
 
         if not user_id:
             raise HTTPException(status_code=401, detail=f"Missing claim: {user_claim}")
@@ -149,7 +148,7 @@ def get_auth_context(
             raise HTTPException(status_code=401, detail=f"Missing claim: {role_claim}")
 
         role_raw = role_raw.lower()
-        allowed_roles: set[str] = {"user", "admin", "partner", "affiliate", "sales"}
+        allowed_roles: set[str] = {"user", "admin", "partner", "affiliate", "sales", "guest"}
         if role_raw not in allowed_roles:
             raise HTTPException(status_code=403, detail="Role not allowed")
 
