@@ -54,6 +54,7 @@ from app.mongo_query_service import generate_mongo_query, generate_pymongo_query
 from app.llm import get_llm
 from app.safety_guard import predict_query_safety
 from app.cache_service import CacheUnavailableError, get_cache_service
+from fastapi.middleware.cors import CORSMiddleware
 
 
 
@@ -116,6 +117,29 @@ limiter = Limiter(
 app = FastAPI()
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ============================================================
+# CORS Configuration
+# ============================================================
+# Get allowed origins from environment, with sensible defaults
+allowed_origins = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:8000,http://localhost:5173"
+).split(",")
+
+# Add your VPS domain here when deploying
+# Example: "https://your-domain.com,https://api.your-domain.com"
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+logger.info(f"CORS enabled for origins: {allowed_origins}")
 
 
 
